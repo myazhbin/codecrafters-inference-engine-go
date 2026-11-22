@@ -28,6 +28,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return fmt.Errorf("usage: inspect <model.safetensors>")
 		}
 		return inspect(args[0], stdout)
+	case "embed":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: embed <model.safetensors> <ids.json>")
+		}
+		return embedCommand(args[0], args[1], stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -68,6 +73,23 @@ func inspect(modelPath string, stdout io.Writer) error {
 		summaries = append(summaries, summary{name, t.DType, t.Shape, first})
 	}
 	return writeJSON(stdout, summaries)
+}
+
+// embedCommand prints the embedding of each token ID in ids.json.
+func embedCommand(modelPath, idsPath string, stdout io.Writer) error {
+	tensors, err := loadTensors(modelPath)
+	if err != nil {
+		return fmt.Errorf("reading tensors: %w", err)
+	}
+	ids, err := readIDs(idsPath)
+	if err != nil {
+		return err
+	}
+	rows, err := embed(tensors, ids, 0)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, rows)
 }
 
 // writeJSON prints v as one line of JSON.
