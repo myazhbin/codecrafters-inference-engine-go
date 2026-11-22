@@ -40,7 +40,6 @@ func (w weights) matrix(name string) (matrix, error) {
 
 // gpt2 is a whole model: embeddings, n_layer blocks, and a final layer norm.
 type gpt2 struct {
-	cfg    config
 	w      weights
 	wte    matrix
 	blocks []block
@@ -55,7 +54,7 @@ func loadModel(w weights, cfg config) (*gpt2, error) {
 	if wte.cols != cfg.NEmbd {
 		return nil, fmt.Errorf("wte.weight rows have %d numbers, want n_embd = %d", wte.cols, cfg.NEmbd)
 	}
-	m := &gpt2{cfg: cfg, w: w, wte: wte}
+	m := &gpt2{w: w, wte: wte}
 	for layer := 0; layer < cfg.NLayer; layer++ {
 		b, err := loadBlock(w, cfg, layer)
 		if err != nil {
