@@ -74,8 +74,9 @@ func softmaxInPlace(scores []float64) {
 // attentionLayer holds one layer's attention weights.
 type attentionLayer struct {
 	nEmbd int
+	nHead int
 	cAttn linear // row → query, key and value, side by side
-	cProj linear // weighted values → output row
+	cProj linear // the heads' results, side by side → output row
 }
 
 func loadAttention(w weights, cfg config, layer int) (attentionLayer, error) {
@@ -88,12 +89,13 @@ func loadAttention(w weights, cfg config, layer int) (attentionLayer, error) {
 	if err != nil {
 		return attentionLayer{}, err
 	}
-	return attentionLayer{cfg.NEmbd, cAttn, cProj}, nil
+	return attentionLayer{cfg.NEmbd, cfg.NHead, cAttn, cProj}, nil
 }
 
-// forward runs causal self-attention: each output row is a weighted average
-// of the values of its own position and every earlier one, projected by
-// c_proj.
+// forward runs causal multi-head self-attention. Each query, key and value
+// is cut into nHead equal slices, and each head turns its own slices into
+// weights over this position and every earlier one. The heads' weighted
+// averages of the values go side by side, in head order, into c_proj.
 func (a attentionLayer) forward(rows [][]float64) [][]float64 {
 	n := a.nEmbd
 	queries := make([][]float64, len(rows))
@@ -104,19 +106,26 @@ func (a attentionLayer) forward(rows [][]float64) [][]float64 {
 		queries[i], keys[i], values[i] = qkv[:n], qkv[n:2*n], qkv[2*n:]
 	}
 
-	scale := 1 / math.Sqrt(float64(n))
+	headSize := n / a.nHead
+	scale := 1 / math.Sqrt(float64(headSize))
 	out := make([][]float64, len(rows))
 	for i := range rows {
-		// Score this position against itself and every earlier one.
-		scores := make([]float64, i+1)
-		for j := 0; j <= i; j++ {
-			scores[j] = dot(queries[i], keys[j]) * scale
-		}
-		softmaxInPlace(scores)
 		mixed := make([]float64, n)
-		for j, weight := range scores {
-			for d, v := range values[j] {
-				mixed[d] += weight * v
+		scores := make([]float64, i+1)
+		for h := 0; h < a.nHead; h++ {
+			lo, hi := h*headSize, (h+1)*headSize
+			// Score this position against itself and every earlier one,
+			// using only this head's slices.
+			q := queries[i][lo:hi]
+			for j := 0; j <= i; j++ {
+				scores[j] = dot(q, keys[j][lo:hi]) * scale
+			}
+			softmaxInPlace(scores)
+			headOut := mixed[lo:hi]
+			for j, weight := range scores {
+				for d, v := range values[j][lo:hi] {
+					headOut[d] += weight * v
+				}
 			}
 		}
 		out[i] = a.cProj.apply(mixed)

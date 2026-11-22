@@ -36,6 +36,9 @@ func readConfig(path string) (config, error) {
 	if cfg.NEmbd <= 0 {
 		return config{}, fmt.Errorf("%s: n_embd must be positive, got %d", path, cfg.NEmbd)
 	}
+	if cfg.NHead <= 0 || cfg.NEmbd%cfg.NHead != 0 {
+		return config{}, fmt.Errorf("%s: n_head = %d doesn't split n_embd = %d into equal heads", path, cfg.NHead, cfg.NEmbd)
+	}
 	if cfg.NLayer < 0 {
 		return config{}, fmt.Errorf("%s: n_layer can't be negative, got %d", path, cfg.NLayer)
 	}
