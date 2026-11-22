@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 )
 
 // Usage: your_program.sh <command> <arg1> <arg2> ...
@@ -33,6 +34,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return fmt.Errorf("usage: embed <model.safetensors> <ids.json>")
 		}
 		return embedCommand(args[0], args[1], stdout)
+	case "attn":
+		if len(args) != 4 {
+			return fmt.Errorf("usage: attn <model.safetensors> <config.json> <layer> <input.json>")
+		}
+		return attnCommand(args[0], args[1], args[2], args[3], stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -90,6 +96,41 @@ func embedCommand(modelPath, idsPath string, stdout io.Writer) error {
 		return err
 	}
 	return writeJSON(stdout, rows)
+}
+
+// layerInputs reads what attn and block share: the weights, the config,
+// the layer number, and the input rows.
+func layerInputs(modelPath, configPath, layerArg, inputPath string) (weights, config, int, [][]float64, error) {
+	cfg, err := readConfig(configPath)
+	if err != nil {
+		return nil, config{}, 0, nil, err
+	}
+	layer, err := strconv.Atoi(layerArg)
+	if err != nil || layer < 0 {
+		return nil, config{}, 0, nil, fmt.Errorf("layer must be a number from 0 up, got %q", layerArg)
+	}
+	rows, err := readRows(inputPath, cfg.NEmbd)
+	if err != nil {
+		return nil, config{}, 0, nil, err
+	}
+	tensors, err := loadTensors(modelPath)
+	if err != nil {
+		return nil, config{}, 0, nil, fmt.Errorf("reading tensors: %w", err)
+	}
+	return tensors, cfg, layer, rows, nil
+}
+
+// attnCommand prints one layer's attention output for the input rows.
+func attnCommand(modelPath, configPath, layerArg, inputPath string, stdout io.Writer) error {
+	w, cfg, layer, rows, err := layerInputs(modelPath, configPath, layerArg, inputPath)
+	if err != nil {
+		return err
+	}
+	attn, err := loadAttention(w, cfg, layer)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, attn.forward(rows))
 }
 
 // writeJSON prints v as one line of JSON.
