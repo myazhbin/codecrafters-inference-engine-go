@@ -53,7 +53,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if len(args) != 4 {
 			return fmt.Errorf("usage: generate <model.safetensors> <config.json> <ids.json> <tokens.json>")
 		}
-		return generateCommand(args[0], args[1], args[2], args[3], stdout)
+		return generateCommand(args[0], args[1], args[2], args[3], stdin, stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -195,8 +195,9 @@ func logitsCommand(modelPath, configPath, idsPath string, stdout io.Writer) erro
 	return writeJSON(stdout, scores)
 }
 
-// generateCommand prints the new token IDs written after ids.json.
-func generateCommand(modelPath, configPath, idsPath, tokensPath string, stdout io.Writer) error {
+// generateCommand prints the new token IDs written after ids.json. When
+// tokens.json has a temperature, stdin holds one random number per new token.
+func generateCommand(modelPath, configPath, idsPath, tokensPath string, stdin io.Reader, stdout io.Writer) error {
 	opts, err := readGenerateOptions(tokensPath)
 	if err != nil {
 		return err
@@ -205,7 +206,7 @@ func generateCommand(modelPath, configPath, idsPath, tokensPath string, stdout i
 	if err != nil {
 		return err
 	}
-	newIDs, err := m.generate(ids, *opts.Count)
+	newIDs, err := m.generate(ids, *opts.Count, newPicker(opts, stdin))
 	if err != nil {
 		return err
 	}
