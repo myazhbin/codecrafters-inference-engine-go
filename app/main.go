@@ -49,6 +49,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return fmt.Errorf("usage: logits <model.safetensors> <config.json> <ids.json>")
 		}
 		return logitsCommand(args[0], args[1], args[2], stdout)
+	case "generate":
+		if len(args) != 4 {
+			return fmt.Errorf("usage: generate <model.safetensors> <config.json> <ids.json> <tokens.json>")
+		}
+		return generateCommand(args[0], args[1], args[2], args[3], stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -188,6 +193,23 @@ func logitsCommand(modelPath, configPath, idsPath string, stdout io.Writer) erro
 		return err
 	}
 	return writeJSON(stdout, scores)
+}
+
+// generateCommand prints the new token IDs written after ids.json.
+func generateCommand(modelPath, configPath, idsPath, tokensPath string, stdout io.Writer) error {
+	opts, err := readGenerateOptions(tokensPath)
+	if err != nil {
+		return err
+	}
+	m, ids, err := modelInputs(modelPath, configPath, idsPath)
+	if err != nil {
+		return err
+	}
+	newIDs, err := m.generate(ids, *opts.Count)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, newIDs)
 }
 
 // writeJSON prints v as one line of JSON.
