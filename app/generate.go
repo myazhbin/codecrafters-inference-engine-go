@@ -78,14 +78,29 @@ func newPicker(opts generateOptions, randoms io.Reader) tokenPicker {
 }
 
 // sample picks a token at random, weighted by its probability, where r is a
-// random number between 0 and 1:
+// random number between 0 and 1: it walks the kept tokens in order, adding
+// up their probabilities, and picks the first one whose total passes r.
+func sample(scores []float64, temperature, topP, r float64) int {
+	ids, probs := nucleus(scores, temperature, topP)
+	total := 0.0
+	for i, id := range ids {
+		total += probs[i]
+		if total > r {
+			return id
+		}
+	}
+	// Rounding left the total a hair under r, which is below 1.
+	return ids[len(ids)-1]
+}
+
+// nucleus returns the tokens top-p sampling chooses from, most likely
+// first, with their probabilities scaled to add up to 1 again:
 //
 //	p = softmax(each logit / temperature)
 //	order = the token ids sorted by p, highest first, the lower id first on a tie
 //	kept = the shortest start of order whose p adds up to at least top_p
 //	divide each kept p by the sum of the kept p, so they add up to 1 again
-//	walk kept in order, adding up p, and pick the first id whose total passes r
-func sample(scores []float64, temperature, topP, r float64) int {
+func nucleus(scores []float64, temperature, topP float64) (ids []int, probs []float64) {
 	p := make([]float64, len(scores))
 	for i, s := range scores {
 		p[i] = s / temperature
@@ -116,21 +131,17 @@ func sample(scores []float64, temperature, topP, r float64) int {
 			}
 		}
 	}
-	kept = max(kept, 1)
+	ids = order[:max(kept, 1)]
 
 	sum := 0.0
-	for _, id := range order[:kept] {
+	for _, id := range ids {
 		sum += p[id]
 	}
-	total := 0.0
-	for _, id := range order[:kept] {
-		total += p[id] / sum
-		if total > r {
-			return id
-		}
+	probs = make([]float64, len(ids))
+	for i, id := range ids {
+		probs[i] = p[id] / sum
 	}
-	// Rounding left the total a hair under r, which is below 1.
-	return order[kept-1]
+	return ids, probs
 }
 
 // generate writes count new token IDs after ids. Each step scores every
