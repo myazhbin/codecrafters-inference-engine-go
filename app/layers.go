@@ -179,14 +179,52 @@ func (a attentionLayer) forward(rows [][]float64) [][]float64 {
 	return out
 }
 
-// block is one transformer layer: attention on a layer-normed copy of each
-// row, added back onto the row it came from.
+// gelu keeps positive numbers near themselves and pushes negative ones
+// toward 0. This is GPT-2's tanh approximation, not the exact erf version;
+// the two differ by up to about 0.0005.
+func gelu(x float64) float64 {
+	return 0.5 * x * (1 + math.Tanh(math.Sqrt(2/math.Pi)*(x+0.044715*x*x*x)))
+}
+
+// mlp widens a row, applies GELU to every number, and narrows it back.
+type mlp struct {
+	cFc   linear // n_embd → hidden, 4 * n_embd in GPT-2
+	cProj linear // hidden → n_embd
+}
+
+func loadMLP(w weights, cfg config, layer int) (mlp, error) {
+	prefix := fmt.Sprintf("h.%d.mlp", layer)
+	// The hidden width comes from c_fc.weight's shape.
+	cFc, err := loadLinear(w, prefix+".c_fc", cfg.NEmbd, -1)
+	if err != nil {
+		return mlp{}, err
+	}
+	cProj, err := loadLinear(w, prefix+".c_proj", cFc.w.cols, cfg.NEmbd)
+	if err != nil {
+		return mlp{}, err
+	}
+	return mlp{cFc, cProj}, nil
+}
+
+func (m mlp) forward(row []float64) []float64 {
+	hidden := m.cFc.apply(row)
+	for i, v := range hidden {
+		hidden[i] = gelu(v)
+	}
+	return m.cProj.apply(hidden)
+}
+
+// block is one transformer layer. Attention mixes rows together and the MLP
+// works on each row alone; each runs on a layer-normed copy of the rows, and
+// its output is added back onto the rows the copy came from.
 //
-//	row ─┬─► ln_1 ─► attention ─► + ─► output
-//	     └────────────────────────┘
+//	row ─┬─► ln_1 ─► attention ─► + ─┬─► ln_2 ─► MLP ─► + ─► output
+//	     └────────────────────────┘  └──────────────────┘
 type block struct {
 	ln1  layerNorm
 	attn attentionLayer
+	ln2  layerNorm
+	mlp  mlp
 }
 
 func loadBlock(w weights, cfg config, layer int) (block, error) {
@@ -198,7 +236,15 @@ func loadBlock(w weights, cfg config, layer int) (block, error) {
 	if err != nil {
 		return block{}, err
 	}
-	return block{ln1, attn}, nil
+	ln2, err := loadLayerNorm(w, fmt.Sprintf("h.%d.ln_2", layer), cfg.NEmbd)
+	if err != nil {
+		return block{}, err
+	}
+	m, err := loadMLP(w, cfg, layer)
+	if err != nil {
+		return block{}, err
+	}
+	return block{ln1, attn, ln2, m}, nil
 }
 
 func (b block) forward(rows [][]float64) [][]float64 {
@@ -209,7 +255,8 @@ func (b block) forward(rows [][]float64) [][]float64 {
 	attended := b.attn.forward(normed)
 	out := make([][]float64, len(rows))
 	for i, row := range rows {
-		out[i] = add(row, attended[i])
+		row = add(row, attended[i])
+		out[i] = add(row, b.mlp.forward(b.ln2.apply(row)))
 	}
 	return out
 }
