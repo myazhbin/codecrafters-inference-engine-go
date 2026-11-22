@@ -39,6 +39,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return fmt.Errorf("usage: attn <model.safetensors> <config.json> <layer> <input.json>")
 		}
 		return attnCommand(args[0], args[1], args[2], args[3], stdout)
+	case "block":
+		if len(args) != 4 {
+			return fmt.Errorf("usage: block <model.safetensors> <config.json> <layer> <input.json>")
+		}
+		return blockCommand(args[0], args[1], args[2], args[3], stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -131,6 +136,19 @@ func attnCommand(modelPath, configPath, layerArg, inputPath string, stdout io.Wr
 		return err
 	}
 	return writeJSON(stdout, attn.forward(rows))
+}
+
+// blockCommand prints one transformer block's output for the input rows.
+func blockCommand(modelPath, configPath, layerArg, inputPath string, stdout io.Writer) error {
+	w, cfg, layer, rows, err := layerInputs(modelPath, configPath, layerArg, inputPath)
+	if err != nil {
+		return err
+	}
+	b, err := loadBlock(w, cfg, layer)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, b.forward(rows))
 }
 
 // writeJSON prints v as one line of JSON.

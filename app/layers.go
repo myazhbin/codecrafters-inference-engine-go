@@ -71,6 +71,52 @@ func softmaxInPlace(scores []float64) {
 	}
 }
 
+// layerNormEpsilon is the 0.00001 from GPT-2's definition of layer norm.
+const layerNormEpsilon = 1e-5
+
+// layerNorm shifts and scales a row so its numbers average 0 with a standard
+// deviation of about 1, then applies a weight and a bias of its own.
+type layerNorm struct {
+	weight, bias []float32
+}
+
+func loadLayerNorm(w weights, prefix string, n int) (layerNorm, error) {
+	weight, err := w.get(prefix + ".weight")
+	if err != nil {
+		return layerNorm{}, err
+	}
+	bias, err := w.get(prefix + ".bias")
+	if err != nil {
+		return layerNorm{}, err
+	}
+	if len(weight.Values) != n || len(bias.Values) != n {
+		return layerNorm{}, fmt.Errorf("%s has %d weights and %d biases, want %d of each", prefix, len(weight.Values), len(bias.Values), n)
+	}
+	return layerNorm{weight.Values, bias.Values}, nil
+}
+
+// apply returns (x - mean) / sqrt(variance + 0.00001) * weight + bias, where
+// the variance is the average of (x - mean)^2, dividing by the count of
+// numbers rather than one less.
+func (ln layerNorm) apply(x []float64) []float64 {
+	mean := 0.0
+	for _, v := range x {
+		mean += v
+	}
+	mean /= float64(len(x))
+	variance := 0.0
+	for _, v := range x {
+		variance += (v - mean) * (v - mean)
+	}
+	variance /= float64(len(x))
+	inv := 1 / math.Sqrt(variance+layerNormEpsilon)
+	out := make([]float64, len(x))
+	for i, v := range x {
+		out[i] = (v-mean)*inv*float64(ln.weight[i]) + float64(ln.bias[i])
+	}
+	return out
+}
+
 // attentionLayer holds one layer's attention weights.
 type attentionLayer struct {
 	nEmbd int
@@ -129,6 +175,50 @@ func (a attentionLayer) forward(rows [][]float64) [][]float64 {
 			}
 		}
 		out[i] = a.cProj.apply(mixed)
+	}
+	return out
+}
+
+// block is one transformer layer: attention on a layer-normed copy of each
+// row, added back onto the row it came from.
+//
+//	row ─┬─► ln_1 ─► attention ─► + ─► output
+//	     └────────────────────────┘
+type block struct {
+	ln1  layerNorm
+	attn attentionLayer
+}
+
+func loadBlock(w weights, cfg config, layer int) (block, error) {
+	ln1, err := loadLayerNorm(w, fmt.Sprintf("h.%d.ln_1", layer), cfg.NEmbd)
+	if err != nil {
+		return block{}, err
+	}
+	attn, err := loadAttention(w, cfg, layer)
+	if err != nil {
+		return block{}, err
+	}
+	return block{ln1, attn}, nil
+}
+
+func (b block) forward(rows [][]float64) [][]float64 {
+	normed := make([][]float64, len(rows))
+	for i, row := range rows {
+		normed[i] = b.ln1.apply(row)
+	}
+	attended := b.attn.forward(normed)
+	out := make([][]float64, len(rows))
+	for i, row := range rows {
+		out[i] = add(row, attended[i])
+	}
+	return out
+}
+
+// add returns a + b, number by number.
+func add(a, b []float64) []float64 {
+	out := make([]float64, len(a))
+	for i := range a {
+		out[i] = a[i] + b[i]
 	}
 	return out
 }
