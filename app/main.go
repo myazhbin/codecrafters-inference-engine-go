@@ -44,6 +44,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return fmt.Errorf("usage: block <model.safetensors> <config.json> <layer> <input.json>")
 		}
 		return blockCommand(args[0], args[1], args[2], args[3], stdout)
+	case "logits":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: logits <model.safetensors> <config.json> <ids.json>")
+		}
+		return logitsCommand(args[0], args[1], args[2], stdout)
 	default:
 		return fmt.Errorf("unknown command %s", command)
 	}
@@ -149,6 +154,40 @@ func blockCommand(modelPath, configPath, layerArg, inputPath string, stdout io.W
 		return err
 	}
 	return writeJSON(stdout, b.forward(rows))
+}
+
+// modelInputs reads what logits and generate share: the model and the IDs.
+func modelInputs(modelPath, configPath, idsPath string) (*gpt2, []int, error) {
+	cfg, err := readConfig(configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids, err := readIDs(idsPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	tensors, err := loadTensors(modelPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading tensors: %w", err)
+	}
+	m, err := loadModel(tensors, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return m, ids, nil
+}
+
+// logitsCommand prints every token's score as the next token after ids.json.
+func logitsCommand(modelPath, configPath, idsPath string, stdout io.Writer) error {
+	m, ids, err := modelInputs(modelPath, configPath, idsPath)
+	if err != nil {
+		return err
+	}
+	scores, err := m.nextLogits(ids)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, scores)
 }
 
 // writeJSON prints v as one line of JSON.

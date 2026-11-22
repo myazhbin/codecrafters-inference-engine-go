@@ -135,7 +135,7 @@ func TestBlockRandomResidualModels(t *testing.T) {
 			dir := t.TempDir()
 			model, config := m.write(t, dir)
 			rows := randomRows(rng, 3, 4)
-			input := writeFile(t, dir, "input.json", rowsJSON(t, rows))
+			input := writeFile(t, dir, "input.json", toJSON(t, rows))
 
 			got := decodeJSON[[][]float64](t, runCommand(t, "", "block", model, config, fmt.Sprint(tc.layer), input))
 			assertClose(t, got, refResidualBlock(m, tc.layer, rows), 1e-9)
@@ -206,7 +206,7 @@ func TestBlockRandomFullModels(t *testing.T) {
 			dir := t.TempDir()
 			model, config := m.write(t, dir)
 			rows := randomRows(rng, 3, tc.embd)
-			input := writeFile(t, dir, "input.json", rowsJSON(t, rows))
+			input := writeFile(t, dir, "input.json", toJSON(t, rows))
 
 			got := decodeJSON[[][]float64](t, runCommand(t, "", "block", model, config, fmt.Sprint(tc.layer), input))
 			assertClose(t, got, refBlock(m, tc.layer, rows), 1e-9)

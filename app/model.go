@@ -38,6 +38,77 @@ func (w weights) matrix(name string) (matrix, error) {
 	return matrix{t.Shape[0], t.Shape[1], t.Values}, nil
 }
 
+// gpt2 is a whole model: embeddings, n_layer blocks, and a final layer norm.
+type gpt2 struct {
+	cfg    config
+	w      weights
+	wte    matrix
+	blocks []block
+	lnF    layerNorm
+}
+
+func loadModel(w weights, cfg config) (*gpt2, error) {
+	wte, err := w.matrix("wte.weight")
+	if err != nil {
+		return nil, err
+	}
+	if wte.cols != cfg.NEmbd {
+		return nil, fmt.Errorf("wte.weight rows have %d numbers, want n_embd = %d", wte.cols, cfg.NEmbd)
+	}
+	m := &gpt2{cfg: cfg, w: w, wte: wte}
+	for layer := 0; layer < cfg.NLayer; layer++ {
+		b, err := loadBlock(w, cfg, layer)
+		if err != nil {
+			return nil, err
+		}
+		m.blocks = append(m.blocks, b)
+	}
+	if m.lnF, err = loadLayerNorm(w, "ln_f", cfg.NEmbd); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// forward embeds the IDs and runs every block on the rows, in layer order.
+func (m *gpt2) forward(ids []int) ([][]float64, error) {
+	rows, err := embed(m.w, ids, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range m.blocks {
+		rows = b.forward(rows)
+	}
+	return rows, nil
+}
+
+// logits scores every token as the one after row: the dot product of the
+// layer-normed row with that token's row of wte.weight. GPT-2 reuses its
+// embedding table here; there is no separate output table.
+func (m *gpt2) logits(row []float64) []float64 {
+	last := m.lnF.apply(row)
+	scores := make([]float64, m.wte.rows)
+	for t := range scores {
+		sum := 0.0
+		for j, w := range m.wte.row(t) {
+			sum += last[j] * float64(w)
+		}
+		scores[t] = sum
+	}
+	return scores
+}
+
+// nextLogits scores every token as the one after the whole sequence of ids.
+func (m *gpt2) nextLogits(ids []int) ([]float64, error) {
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("there are no token IDs to continue")
+	}
+	rows, err := m.forward(ids)
+	if err != nil {
+		return nil, err
+	}
+	return m.logits(rows[len(rows)-1]), nil
+}
+
 // embed turns each token ID into a row of numbers: row id of wte.weight plus
 // row position of wpe.weight. The first ID sits at position start.
 func embed(w weights, ids []int, start int) ([][]float64, error) {

@@ -154,10 +154,10 @@ func (m *testModel) write(t testing.TB, dir string) (modelPath, configPath strin
 	return modelPath, writeFile(t, dir, "config.json", string(cfg))
 }
 
-// rowsJSON encodes rows as JSON, for input.json.
-func rowsJSON(t testing.TB, rows [][]float64) string {
+// toJSON encodes v as JSON, for input files.
+func toJSON(t testing.TB, v any) string {
 	t.Helper()
-	data, err := json.Marshal(rows)
+	data, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}

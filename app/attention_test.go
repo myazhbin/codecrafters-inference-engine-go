@@ -88,7 +88,7 @@ func TestAttnRandomSingleHeadModels(t *testing.T) {
 			dir := t.TempDir()
 			model, config := m.write(t, dir)
 			rows := randomRows(rng, 3, 4)
-			input := writeFile(t, dir, "input.json", rowsJSON(t, rows))
+			input := writeFile(t, dir, "input.json", toJSON(t, rows))
 
 			got := decodeJSON[[][]float64](t, runCommand(t, "", "attn", model, config, fmt.Sprint(tc.layer), input))
 			assertClose(t, got, refAttention(m, tc.layer, rows), 1e-9)
@@ -123,7 +123,7 @@ func TestAttnRandomMultiHeadModels(t *testing.T) {
 			dir := t.TempDir()
 			model, config := m.write(t, dir)
 			rows := randomRows(rng, 4, tc.embd)
-			input := writeFile(t, dir, "input.json", rowsJSON(t, rows))
+			input := writeFile(t, dir, "input.json", toJSON(t, rows))
 
 			got := decodeJSON[[][]float64](t, runCommand(t, "", "attn", model, config, fmt.Sprint(tc.layer), input))
 			assertClose(t, got, refAttention(m, tc.layer, rows), 1e-9)
