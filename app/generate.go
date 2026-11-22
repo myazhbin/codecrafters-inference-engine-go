@@ -136,20 +136,44 @@ func sample(scores []float64, temperature, topP, r float64) int {
 // generate writes count new token IDs after ids. Each step scores every
 // token as the next one, lets pick choose one, and appends it, so the next
 // step scores the longer sequence.
+//
+// Earlier tokens' keys and values never change, so the sequence keeps them:
+// the prompt runs through the layers once, and then each new token runs
+// alone at its position in the whole sequence. The last new token is never
+// fed back in, since nothing is scored after it.
 func (m *gpt2) generate(ids []int, count int, pick tokenPicker) ([]int, error) {
-	seq := append([]int(nil), ids...)
+	return m.newSequence().generate(ids, count, pick)
+}
+
+// generate feeds ids into the sequence and then writes count new IDs after
+// them, feeding in every new ID but the last.
+func (seq *sequence) generate(ids []int, count int, pick tokenPicker) ([]int, error) {
 	newIDs := make([]int, 0, count)
-	for len(newIDs) < count {
-		scores, err := m.nextLogits(seq)
-		if err != nil {
-			return nil, err
-		}
-		next, err := pick(scores)
-		if err != nil {
-			return nil, err
-		}
-		seq = append(seq, next)
-		newIDs = append(newIDs, next)
+	if count == 0 {
+		return newIDs, nil
 	}
-	return newIDs, nil
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("there are no token IDs to continue")
+	}
+	m := seq.m
+	rows, err := seq.feed(ids)
+	if err != nil {
+		return nil, err
+	}
+	last := rows[len(rows)-1]
+	for {
+		next, err := pick(m.logits(last))
+		if err != nil {
+			return nil, err
+		}
+		newIDs = append(newIDs, next)
+		if len(newIDs) == count {
+			return newIDs, nil
+		}
+		rows, err := seq.feed([]int{next})
+		if err != nil {
+			return nil, err
+		}
+		last = rows[0]
+	}
 }

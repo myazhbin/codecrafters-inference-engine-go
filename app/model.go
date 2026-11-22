@@ -69,16 +69,35 @@ func loadModel(w weights, cfg config) (*gpt2, error) {
 	return m, nil
 }
 
-// forward embeds the IDs and runs every block on the rows, in layer order.
-func (m *gpt2) forward(ids []int) ([][]float64, error) {
-	rows, err := embed(m.w, ids, 0)
+// sequence is a run of tokens fed through the model so far, with every
+// layer's keys and values kept so that later tokens can reuse them.
+type sequence struct {
+	m      *gpt2
+	caches []kvCache // one per layer
+	length int       // how many positions have been fed
+}
+
+func (m *gpt2) newSequence() *sequence {
+	return &sequence{m: m, caches: make([]kvCache, len(m.blocks))}
+}
+
+// feed embeds the IDs at the positions after those already fed, and runs
+// them through every block in layer order, returning the final rows.
+func (s *sequence) feed(ids []int) ([][]float64, error) {
+	rows, err := embed(s.m.w, ids, s.length)
 	if err != nil {
 		return nil, err
 	}
-	for _, b := range m.blocks {
-		rows = b.forward(rows)
+	for layer, b := range s.m.blocks {
+		rows = b.forwardCached(rows, &s.caches[layer])
 	}
+	s.length += len(ids)
 	return rows, nil
+}
+
+// forward embeds the IDs and runs every block on the rows, in layer order.
+func (m *gpt2) forward(ids []int) ([][]float64, error) {
+	return m.newSequence().feed(ids)
 }
 
 // logits scores every token as the one after row: the dot product of the

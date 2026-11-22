@@ -138,38 +138,53 @@ func loadAttention(w weights, cfg config, layer int) (attentionLayer, error) {
 	return attentionLayer{cfg.NEmbd, cfg.NHead, cAttn, cProj}, nil
 }
 
-// forward runs causal multi-head self-attention. Each query, key and value
-// is cut into nHead equal slices, and each head turns its own slices into
-// weights over this position and every earlier one. The heads' weighted
-// averages of the values go side by side, in head order, into c_proj.
-func (a attentionLayer) forward(rows [][]float64) [][]float64 {
-	n := a.nEmbd
-	queries := make([][]float64, len(rows))
-	keys := make([][]float64, len(rows))
-	values := make([][]float64, len(rows))
-	for i, row := range rows {
-		qkv := a.cAttn.apply(row)
-		queries[i], keys[i], values[i] = qkv[:n], qkv[n:2*n], qkv[2*n:]
-	}
+// kvCache keeps one layer's key and value for every position so far, in
+// order. Head h's key and value are slice h of each, so these rows hold the
+// lists for every head of the layer at once.
+type kvCache struct {
+	keys, values [][]float64
+}
 
+// forward runs causal multi-head self-attention on rows that start at
+// position 0.
+func (a attentionLayer) forward(rows [][]float64) [][]float64 {
+	return a.forwardCached(rows, &kvCache{})
+}
+
+// forwardCached runs causal multi-head self-attention on rows that come
+// right after the positions already in cache, adding their keys and values
+// to it.
+//
+// Each query, key and value is cut into nHead equal slices, and each head
+// turns its own slices into weights over the row's position and every
+// earlier one. The heads' weighted averages of the values go side by side,
+// in head order, into c_proj. Rows are taken left to right, each adding its
+// key and value before scoring, so a row only ever sees itself and earlier
+// positions.
+func (a attentionLayer) forwardCached(rows [][]float64, cache *kvCache) [][]float64 {
+	n := a.nEmbd
 	headSize := n / a.nHead
 	scale := 1 / math.Sqrt(float64(headSize))
 	out := make([][]float64, len(rows))
-	for i := range rows {
+	for i, row := range rows {
+		qkv := a.cAttn.apply(row)
+		query := qkv[:n]
+		cache.keys = append(cache.keys, qkv[n:2*n])
+		cache.values = append(cache.values, qkv[2*n:])
+
+		positions := len(cache.keys)
+		scores := make([]float64, positions)
 		mixed := make([]float64, n)
-		scores := make([]float64, i+1)
 		for h := 0; h < a.nHead; h++ {
 			lo, hi := h*headSize, (h+1)*headSize
-			// Score this position against itself and every earlier one,
-			// using only this head's slices.
-			q := queries[i][lo:hi]
-			for j := 0; j <= i; j++ {
-				scores[j] = dot(q, keys[j][lo:hi]) * scale
+			q := query[lo:hi]
+			for j, key := range cache.keys {
+				scores[j] = dot(q, key[lo:hi]) * scale
 			}
 			softmaxInPlace(scores)
 			headOut := mixed[lo:hi]
 			for j, weight := range scores {
-				for d, v := range values[j][lo:hi] {
+				for d, v := range cache.values[j][lo:hi] {
 					headOut[d] += weight * v
 				}
 			}
@@ -247,12 +262,20 @@ func loadBlock(w weights, cfg config, layer int) (block, error) {
 	return block{ln1, attn, ln2, m}, nil
 }
 
+// forward runs the block on rows that start at position 0.
 func (b block) forward(rows [][]float64) [][]float64 {
+	return b.forwardCached(rows, &kvCache{})
+}
+
+// forwardCached runs the block on rows that come right after the positions
+// already in this layer's cache. Only attention looks at other positions;
+// the layer norms and the MLP work on one row at a time.
+func (b block) forwardCached(rows [][]float64, cache *kvCache) [][]float64 {
 	normed := make([][]float64, len(rows))
 	for i, row := range rows {
 		normed[i] = b.ln1.apply(row)
 	}
-	attended := b.attn.forward(normed)
+	attended := b.attn.forwardCached(normed, cache)
 	out := make([][]float64, len(rows))
 	for i, row := range rows {
 		row = add(row, attended[i])
